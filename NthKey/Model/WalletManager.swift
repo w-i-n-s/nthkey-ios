@@ -32,18 +32,17 @@ struct WalletManager {
     }
     
     mutating func setKeys() {        
-        if let fingerprint = UserDefaults.fingerprint {
-            if let mnemonic = try? WalletManager.getMnemonic() {
-                let seedHex = mnemonic.seedHex()
-                self.network = UserDefaults.mainnet ? .mainnet : .testnet
-                let masterKey = HDKey(seedHex, self.network)!
-                assert(masterKey.fingerprint == fingerprint)
-                self.hasSeed = true
-                (self.us, self.cosigners) = Signer.getSigners()
-                self.threshold = UserDefaults.threshold
-                self.hasWallet = UserDefaults.hasWallet
-            }
-        }
+        guard let fingerprint = UserDefaults.fingerprint,
+              let mnemonic = try? WalletManager.getMnemonic() else { return }
+        
+        let seedHex = mnemonic.seedHex()
+        self.network = UserDefaults.mainnet ? .mainnet : .testnet
+        let masterKey = HDKey(seedHex, self.network)!
+        assert(masterKey.fingerprint == fingerprint)
+        self.hasSeed = true
+        (self.us, self.cosigners) = Signer.getSigners()
+        self.threshold = UserDefaults.threshold
+        self.hasWallet = UserDefaults.hasWallet
     }
     
     mutating func setMainnet() {
@@ -139,71 +138,74 @@ struct WalletManager {
         let json = try? JSONSerialization.jsonObject(with: data, options: .mutableLeaves)
 
         // Check if it uses Specter format:
-        if let jsonResult = json as? Dictionary<String, AnyObject>,
-           let descriptor = jsonResult["descriptor"] as? String
-        {
-            if let desc = try? OutputDescriptor(descriptor) {
-                switch desc.descType {
-                case .sortedMulti(let threshold):
-                    if desc.extendedKeys.count < 2 {
-                        print("Require at least 2 keys")
-                        return
-                    }
-                    if !desc.extendedKeys.contains(where: { (key) -> Bool in
-                        key.fingerprint == us!.fingerprint.hexString
-                    }) {
-                        print("We're not part of the wallet")
-                        return
-                    }
-                    desc.extendedKeys.forEach { (key) in
-                        if (key.fingerprint == us!.fingerprint.hexString) { return }
-                            let extendedKey = Data(base58: key.xpub)!
-                            // Check that this is a testnet tpub
-                            let marker = Data(extendedKey.subdata(in: 0..<4))
-                            if marker != Data("043587cf")! && marker != Data("0488b21e") {
-                                NSLog("Expected tpub marker (0x043587cf) or xpub marker (0x0488b21e), got 0x%@", marker.hexString)
-                                return
-                            }
-                        if let hdKey = HDKey(key.xpub) {
-                            let cosigner = Signer(fingerprint: Data(key.fingerprint)!, derivation: BIP32Path(key.origin)!, hdKey: hdKey, name: "")
-                            self.cosigners.append(cosigner)
-                        } else {
-                            NSLog("Malformated cosigner xpub")
-                            return
-                        }
-                    }
-                    if self.cosigners.count != desc.extendedKeys.count - 1 {
-                        NSLog("Cosigner count does not match descriptor keys count")
-                        self.cosigners = []
-                        return
-                    }
-                    self.saveCosigners()
-                    // Wallet creation:
-                    self.threshold = threshold
-                    UserDefaults.threshold = threshold
-                    UserDefaults.hasWallet = true
-                    self.hasWallet = true
-                default:
-                    print("Expected sortedmulti descriptor")
+        guard let jsonResult = json as? Dictionary<String, AnyObject>,
+              let descriptor = jsonResult["descriptor"] as? String else {
+            print("JSON format not recognized: \(json ?? "empty")")
+            return // TODO: Publish an error
+        }
+
+        guard let desc = try? OutputDescriptor(descriptor) else {
+            print("Unable to parse descriptor: \(descriptor)")
+            return // TODO: Publish an error
+        }
+
+        switch desc.descType {
+            case .sortedMulti(let threshold):
+                guard desc.extendedKeys.count >= 2 else {
+                    print("Require at least 2 keys")
                     return
                 }
-            } else {
-                print("Unable to parse descriptor: \(descriptor)")
-            }
-        } else {
-            print("JSON format not recognized:")
-            print(json ?? "empty")
+
+                guard desc.extendedKeys.contains(where: { (key) -> Bool in
+                    key.fingerprint == us!.fingerprint.hexString
+                }) else {
+                    print("We're not part of the wallet")
+                    return
+                }
+                
+                desc.extendedKeys.forEach { (key) in
+                    if (key.fingerprint == us!.fingerprint.hexString) { return }
+                    let extendedKey = Data(base58: key.xpub)!
+                    // Check that this is a testnet tpub
+                    let marker = Data(extendedKey.subdata(in: 0..<4))
+                    if marker != Data("043587cf")! && marker != Data("0488b21e") {
+                        NSLog("Expected tpub marker (0x043587cf) or xpub marker (0x0488b21e), got 0x%@", marker.hexString)
+                        return
+                    }
+                    guard let hdKey = HDKey(key.xpub) else {
+                        NSLog("Malformated cosigner xpub")
+                        return
+                    }
+
+                    let cosigner = Signer(fingerprint: Data(key.fingerprint)!, derivation: BIP32Path(key.origin)!, hdKey: hdKey, name: "")
+                    self.cosigners.append(cosigner)
+                }
+
+                guard self.cosigners.count == desc.extendedKeys.count - 1 else {
+                    NSLog("Cosigner count does not match descriptor keys count")
+                    self.cosigners = []
+                    return
+                }
+
+                self.saveCosigners()
+                // Wallet creation:
+                self.threshold = threshold
+                UserDefaults.threshold = threshold
+                UserDefaults.hasWallet = true
+                self.hasWallet = true
+            default:
+                print("Expected sortedmulti descriptor")
+                return
         }
     }
 
     mutating func loadWalletFile(_ url: URL) {
-        do {
-            let data = try Data(contentsOf: URL(fileURLWithPath: url.path), options: .mappedIfSafe)
-            loadWallet(data)
-        } catch {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: url.path), options: .mappedIfSafe) else {
             NSLog("Something went wrong parsing JSON file")
             return
         }
+
+        loadWallet(data)
     }
 
     mutating func saveCosigners() {
@@ -216,11 +218,12 @@ struct WalletManager {
     }
 
     func mnemonic() -> String {
-        if us != nil {
-            return try! WalletManager.getMnemonic().description
-        } else {
+        guard us != nil,
+            let result = try? WalletManager.getMnemonic().description else {
             return ""
         }
+
+        return result
     }
 
     func writeFile(folderUrl: URL, fileName: String, textData: Data) {
