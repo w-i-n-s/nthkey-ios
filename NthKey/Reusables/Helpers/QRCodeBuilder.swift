@@ -20,13 +20,12 @@ class QRCodeBuilder {
         let data = Data(string.utf8)
         filter.setValue(data, forKey: "inputMessage")
 
-        if let outputImage = filter.outputImage {
-            if let cgimg = context.createCGImage(outputImage, from: outputImage.extent) {
-                return UIImage(cgImage: cgimg)
-            }
+        guard let outputImage = filter.outputImage,
+              let cgimg = context.createCGImage(outputImage, from: outputImage.extent) else {
+            return UIImage(systemName: "xmark.circle") ?? UIImage()
         }
-
-        return UIImage(systemName: "xmark.circle") ?? UIImage()
+        
+        return UIImage(cgImage: cgimg)
     }
     
     static func generateQRCode(from data: Data) -> UIImage? {

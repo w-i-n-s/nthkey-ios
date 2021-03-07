@@ -31,23 +31,6 @@ struct SignView : View {
         }
     }
     
-    // TODO: deduplicate QR display code from SettingsView
-    let context = CIContext()
-    let filter = CIFilter.qrCodeGenerator()
-
-    func generateQRCode(from string: String) -> UIImage {
-        let data = Data(string.utf8)
-        filter.setValue(data, forKey: "inputMessage")
-
-        if let outputImage = filter.outputImage {
-            if let cgimg = context.createCGImage(outputImage, from: outputImage.extent) {
-                return UIImage(cgImage: cgimg)
-            }
-        }
-
-        return UIImage(systemName: "xmark.circle") ?? UIImage()
-    }
-    
     func openPSBT(_ url: URL) {
         DispatchQueue.main.async() {
             self.appState.psbtManager.open(url)
@@ -97,12 +80,14 @@ struct SignView : View {
                         }
                         .disabled(!appState.psbtManager.canSign || appState.psbtManager.signed)
 
-                        if (appState.psbtManager.signed) {
-                            Image(uiImage: generateQRCode(from: self.appState.psbtManager.psbt!.description))
-                                .interpolation(.none)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 350, height: 350)
+                        if appState.psbtManager.signed {
+                            if let image = QRCodeBuilder.generateQRCode(from: self.appState.psbtManager.psbt!.description) {
+                                Image(uiImage: image)
+                                    .interpolation(.none)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 350, height: 350)
+                            }
 
                             Button("Save") {
                                 self.vc!.savePSBT(self.appState.psbtManager.psbt!, self.didSavePSBT)
